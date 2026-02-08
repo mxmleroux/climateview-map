@@ -252,6 +252,38 @@ var pinSvg = function(color) {
     '<circle cx="6" cy="5.8" r="2" fill="white" opacity="0.9"/></svg></span>';
 };
 
+// ---- GEOCODING FALLBACK (OpenStreetMap Nominatim) ----
+function geocodeCity(cityName, country) {
+  var query = encodeURIComponent(cityName + ', ' + country);
+  var url = 'https://nominatim.openstreetmap.org/search?q=' + query + '&format=json&limit=1';
+  return fetch(url, { headers: { 'Accept': 'application/json' } })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data && data.length > 0) {
+        return { coords: [parseFloat(data[0].lat), parseFloat(data[0].lon)], displayName: cityName };
+      }
+      return null;
+    })
+    .catch(function() { return null; });
+}
+
+function geocodeBatch(items) {
+  // Sequential with 1.1s delay to respect Nominatim rate limit
+  var results = [];
+  var chain = Promise.resolve();
+  items.forEach(function(item, idx) {
+    chain = chain.then(function() {
+      return geocodeCity(item.cityName, item.country).then(function(result) {
+        results.push({ item: item, result: result });
+        if (idx < items.length - 1) {
+          return new Promise(function(resolve) { setTimeout(resolve, 1100); });
+        }
+      });
+    });
+  });
+  return chain.then(function() { return results; });
+}
+
 // ---- FETCH & RENDER ----
 var loadingEl = document.getElementById('loading');
 
@@ -280,7 +312,7 @@ tryFetch(SHEET_URL, 'primary')
     }
 
     var cities = [];
-    var skipped = [];
+    var needGeocode = [];
     var seenCoords = {};
 
     rows.forEach(function(row) {
@@ -291,7 +323,7 @@ tryFetch(SHEET_URL, 'primary')
 
       var result = findCoords(cityName, country, sheetMarket);
       if (!result) {
-        skipped.push(cityName);
+        needGeocode.push({ cityName: cityName, country: country, sheetMarket: sheetMarket });
         return;
       }
 
@@ -310,19 +342,51 @@ tryFetch(SHEET_URL, 'primary')
       });
     });
 
-    if (skipped.length > 0) {
-      console.log('[ClimateView] Skipped (no coords):', skipped);
-    }
-    console.log('[ClimateView] Rendering ' + cities.length + ' cities');
-
-    if (cities.length === 0 && rows.length > 0) {
-      loadingEl.style.display = 'block';
-      loadingEl.innerHTML = 'Data loaded (' + rows.length + ' rows) but no cities matched.<br>Columns: ' + Object.keys(rows[0]).join(', ') + '<br>Check console (F12).';
-      loadingEl.style.fontSize = '11px'; loadingEl.style.textAlign = 'center';
-      loadingEl.style.maxWidth = '400px'; loadingEl.style.lineHeight = '1.6';
+    // Geocode any cities not found in COORDS
+    var geocodePromise;
+    if (needGeocode.length > 0) {
+      console.log('[ClimateView] Geocoding ' + needGeocode.length + ' cities via Nominatim:', needGeocode.map(function(x) { return x.cityName; }));
+      geocodePromise = geocodeBatch(needGeocode);
+    } else {
+      geocodePromise = Promise.resolve([]);
     }
 
-    renderMap(cities);
+    return geocodePromise.then(function(geoResults) {
+      var geocoded = 0;
+      var failed = [];
+      geoResults.forEach(function(gr) {
+        if (gr.result) {
+          var coordKey = gr.result.coords[0] + ',' + gr.result.coords[1];
+          if (!seenCoords[coordKey]) {
+            seenCoords[coordKey] = true;
+            var market = mapMarket(gr.item.sheetMarket, gr.item.country);
+            cities.push({
+              name: gr.result.displayName,
+              lat: gr.result.coords[0],
+              lng: gr.result.coords[1],
+              country: gr.item.country,
+              market: market
+            });
+            geocoded++;
+          }
+        } else {
+          failed.push(gr.item.cityName);
+        }
+      });
+
+      if (geocoded > 0) console.log('[ClimateView] Geocoded ' + geocoded + ' new cities');
+      if (failed.length > 0) console.log('[ClimateView] Failed to geocode:', failed);
+      console.log('[ClimateView] Rendering ' + cities.length + ' cities total');
+
+      if (cities.length === 0 && rows.length > 0) {
+        loadingEl.style.display = 'block';
+        loadingEl.innerHTML = 'Data loaded (' + rows.length + ' rows) but no cities matched.<br>Columns: ' + Object.keys(rows[0]).join(', ') + '<br>Check console (F12).';
+        loadingEl.style.fontSize = '11px'; loadingEl.style.textAlign = 'center';
+        loadingEl.style.maxWidth = '400px'; loadingEl.style.lineHeight = '1.6';
+      }
+
+      renderMap(cities);
+    });
   })
   .catch(function(err) {
     console.error('[ClimateView] Failed to load sheet:', err);
