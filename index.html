@@ -53,6 +53,23 @@ body {
   cursor: pointer; pointer-events: auto;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.15));
 }
+@keyframes pulseRing {
+  0% { transform: translate(-50%,-50%) scale(0.7); opacity: 0.7; }
+  70% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
+  100% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
+}
+.pulse-dot {
+  position: absolute; top: 35%; left: 50%;
+  width: 12px; height: 12px; border-radius: 50%;
+  pointer-events: none; z-index: -1;
+}
+.pulse-dot::before, .pulse-dot::after {
+  content: ''; position: absolute; top: 0; left: 0;
+  width: 100%; height: 100%; border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: pulseRing 2.4s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+.pulse-dot::after { animation-delay: 1.2s; }
 .pin-inner {
   opacity: 0; display: inline-block;
 }
@@ -60,8 +77,8 @@ body {
   animation: pinFlyIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .city-label span {
-  font-family: 'Inter', sans-serif; font-size: 9px; font-weight: 400;
-  color: #999; letter-spacing: 0.3px; white-space: nowrap; padding-left: 4px;
+  font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 400;
+  color: #999; letter-spacing: 0.3px; white-space: nowrap; padding-left: 5px;
 }
 .leaflet-tooltip {
   background: #ffffff !important; border: 1px solid #e5e5e5 !important;
@@ -155,7 +172,7 @@ var SCENE_TEXT = { "Europe":"#ffffff","DACH":"#ffffff","UK":"#ffffff","Nordics":
 
 // ---- MAP INIT ----
 var map = L.map('map', {
-  zoomControl: true, attributionControl: true,
+  zoomControl: false, attributionControl: false,
   minZoom: 2, maxZoom: 14, zoomSnap: 0.5,
   zoomDelta: 0.5, worldCopyJump: true
 }).setView([52.5, 10], 5);
@@ -246,8 +263,9 @@ function findCoords(cityName, country, sheetMarket) {
 }
 
 // ---- PIN SVG ----
-var pinSvg = function(color) {
-  return '<span class="pin-inner"><svg viewBox="0 0 12 16" width="10" height="14" xmlns="http://www.w3.org/2000/svg">' +
+var pinSvg = function(color, isNew) {
+  var pulse = isNew ? '<span class="pulse-dot" style="color:' + color + '"></span>' : '';
+  return '<span class="pin-inner">' + pulse + '<svg viewBox="0 0 12 16" width="12" height="17" xmlns="http://www.w3.org/2000/svg">' +
     '<path d="M6 0C2.7 0 0 2.7 0 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.3-2.7-6-6-6z" fill="' + color + '"/>' +
     '<circle cx="6" cy="5.8" r="2" fill="white" opacity="0.9"/></svg></span>';
 };
@@ -432,15 +450,38 @@ function renderMap(cities) {
   });
   legendEl.innerHTML = legendHTML;
 
+  // ---- NEW-CITY DETECTION via localStorage ----
+  var STORAGE_KEY = 'cv_map_known_cities';
+  var newCitySet = {};
+  try {
+    var now = Date.now();
+    var stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    var updated = {};
+    cities.forEach(function(c) {
+      var key = c.name + '|' + c.country;
+      if (stored[key]) {
+        updated[key] = stored[key];
+        if (now - stored[key] < 30 * 24 * 60 * 60 * 1000) { newCitySet[key] = true; }
+      } else {
+        updated[key] = now;
+        newCitySet[key] = true;
+      }
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    // On very first load (no prior data), don't pulse everything
+    if (Object.keys(stored).length === 0) { newCitySet = {}; }
+  } catch(e) {}
+
   // ---- MARKERS with fly-in animation ----
   var sorted = cities.slice().sort(function(a, b) { return a.lng - b.lng; });
   var allMarkers = [];
   sorted.forEach(function(city, i) {
     var color = MARKET_COLORS[city.market] || '#78909C';
+    var isNew = !!newCitySet[city.name + '|' + city.country];
     var icon = L.divIcon({
       className: 'pin-marker',
-      html: pinSvg(color),
-      iconSize: [10, 14], iconAnchor: [5, 14]
+      html: pinSvg(color, isNew),
+      iconSize: [12, 17], iconAnchor: [6, 17]
     });
     var marker = L.marker([city.lat, city.lng], { icon: icon })
       .bindTooltip(city.name + ' \u2013 ' + city.country, {
@@ -510,10 +551,10 @@ var nextScene = function() {
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
   isAutoPanning = true;
-  map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.25 });
+  map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 4.5, easeLinearity: 0.15 });
   map.once('moveend', function() { isAutoPanning = false; });
   sceneIndex = (sceneIndex + 1) % scenes.length;
-  autoPanTimer = setTimeout(nextScene, scene.dwell + 3000);
+  autoPanTimer = setTimeout(nextScene, scene.dwell + 4500);
 };
 
 var pauseAutoPan = function() {
