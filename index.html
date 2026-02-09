@@ -451,25 +451,26 @@ function renderMap(cities) {
   legendEl.innerHTML = legendHTML;
 
   // ---- NEW-CITY DETECTION via localStorage ----
-  var STORAGE_KEY = 'cv_map_known_cities';
+  var STORAGE_KEY = 'cv_map_cities_v2';
   var newCitySet = {};
   try {
     var now = Date.now();
     var stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    var isFirstLoad = Object.keys(stored).length === 0;
     var updated = {};
     cities.forEach(function(c) {
       var key = c.name + '|' + c.country;
-      if (stored[key]) {
+      if (stored[key] !== undefined) {
         updated[key] = stored[key];
-        if (now - stored[key] < 30 * 24 * 60 * 60 * 1000) { newCitySet[key] = true; }
+        if (stored[key] > 0 && now - stored[key] < 30 * 24 * 60 * 60 * 1000) {
+          newCitySet[key] = true;
+        }
       } else {
-        updated[key] = now;
-        newCitySet[key] = true;
+        updated[key] = isFirstLoad ? 0 : now;
+        if (!isFirstLoad) { newCitySet[key] = true; }
       }
     });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    // On very first load (no prior data), don't pulse everything
-    if (Object.keys(stored).length === 0) { newCitySet = {}; }
   } catch(e) {}
 
   // ---- MARKERS with fly-in animation ----
