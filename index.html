@@ -67,7 +67,6 @@ body {
 }
 .pin-marker {
   cursor: pointer; pointer-events: auto;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.15));
 }
 @keyframes pulseRing {
   0% { transform: translate(-50%,-50%) scale(0.7); opacity: 0.7; }
@@ -78,16 +77,21 @@ body {
   position: absolute; top: 35%; left: 50%;
   width: 12px; height: 12px; border-radius: 50%;
   pointer-events: none; z-index: -1;
+  will-change: transform, opacity;
+  contain: strict;
 }
 .pulse-dot::before, .pulse-dot::after {
   content: ''; position: absolute; top: 0; left: 0;
   width: 100%; height: 100%; border-radius: 50%;
   border: 2px solid currentColor;
   animation: pulseRing 2.4s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  will-change: transform, opacity;
 }
 .pulse-dot::after { animation-delay: 1.2s; }
 .pin-inner {
   opacity: 0; display: inline-block;
+  will-change: transform, opacity;
+  contain: layout style;
 }
 .fly-in .pin-inner {
   animation: pinFlyIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
@@ -108,8 +112,8 @@ body {
 #legend {
   position: fixed; bottom: 36px; left: 48px;
   display: flex; flex-direction: column; gap: 8px;
-  padding: 20px 26px; background: rgba(255,255,255,0.92);
-  backdrop-filter: blur(12px); border-radius: 10px;
+  padding: 20px 26px; background: rgba(255,255,255,0.96);
+  border-radius: 10px;
   border: 1px solid #e5e5e5; z-index: 1000;
 }
 .legend-item {
@@ -124,9 +128,10 @@ body {
   font-family: 'Inter', sans-serif;
   font-size: 16px; font-weight: 700; letter-spacing: 1.4px;
   text-transform: uppercase; z-index: 1000;
-  transition: opacity 0.5s ease, transform 0.5s ease;
+  transition: opacity 0.4s ease, transform 0.4s ease;
   opacity: 0; transform: translateY(-6px);
   box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+  will-change: opacity, transform;
 }
 #region-tag.visible { opacity: 1; transform: translateY(0); }
 #loading {
@@ -199,7 +204,8 @@ var SCENE_TEXT = { "Global":"#ffffff","Europe":"#ffffff","DACH":"#ffffff","UK":"
 var map = L.map('map', {
   zoomControl: false, attributionControl: false,
   minZoom: 2, maxZoom: 14, zoomSnap: 0.5,
-  zoomDelta: 0.5, worldCopyJump: true
+  zoomDelta: 0.5, worldCopyJump: true,
+  preferCanvas: true
 }).setView([52.5, 10], 5);
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
@@ -525,9 +531,11 @@ function renderMap(cities) {
   // ---- MARKERS with fly-in animation ----
   var sorted = cities.slice().sort(function(a, b) { return a.lng - b.lng; });
   var allMarkers = [];
+  var pulseCount = 0; var MAX_PULSE = 30;
   sorted.forEach(function(city, i) {
     var color = MARKET_COLORS[city.market] || '#78909C';
-    var isNew = !!newCitySet[city.name + '|' + city.country];
+    var isNew = !!newCitySet[city.name + '|' + city.country] && pulseCount < MAX_PULSE;
+    if (isNew) pulseCount++;
     var icon = L.divIcon({
       className: 'pin-marker',
       html: pinSvg(color, isNew),
@@ -542,7 +550,7 @@ function renderMap(cities) {
 
   // Fly-in: staggered with randomness for organic feel
   allMarkers.forEach(function(item) {
-    var delay = 700 + item.index * 10 + Math.random() * 180;
+    var delay = 500 + item.index * 6 + Math.random() * 80;
     setTimeout(function() {
       var el = item.marker.getElement ? item.marker.getElement() : item.marker._icon;
       if (el) el.classList.add('fly-in');
@@ -615,13 +623,13 @@ var hideRegionTag = function() { regionTag.classList.remove('visible'); };
 
 // ---- AUTO-PAN ----
 var scenes = [
-  { lat: 30.0, lng: 0.0, zoom: 2.5, label: 'Global', dwell: 7000 },
-  { lat: 52.0, lng: 8.5, zoom: 5, label: 'Europe', dwell: 8000 },
-  { lat: 50.5, lng: 10.0, zoom: 6, label: 'DACH', dwell: 9000 },
-  { lat: 55.5, lng: -3.5, zoom: 6, label: 'UK', dwell: 8000 },
-  { lat: 60.0, lng: 16.0, zoom: 5.5, label: 'Nordics', dwell: 8000 },
-  { lat: 52.0, lng: 5.5, zoom: 7.5, label: 'Benelux', dwell: 7000 },
-  { lat: 40.0, lng: -88.0, zoom: 4, label: 'US', dwell: 8000 },
+  { lat: 30.0, lng: 0.0, zoom: 2.5, label: 'Global', dwell: 120000 },
+  { lat: 52.0, lng: 8.5, zoom: 5, label: 'Europe', dwell: 120000 },
+  { lat: 50.5, lng: 10.0, zoom: 6, label: 'DACH', dwell: 120000 },
+  { lat: 55.5, lng: -3.5, zoom: 6, label: 'UK', dwell: 120000 },
+  { lat: 60.0, lng: 16.0, zoom: 5.5, label: 'Nordics', dwell: 120000 },
+  { lat: 52.0, lng: 5.5, zoom: 7.5, label: 'Benelux', dwell: 120000 },
+  { lat: 40.0, lng: -88.0, zoom: 4, label: 'US', dwell: 120000 },
 ];
 var sceneIndex = 0; var autoPanTimer = null;
 var pauseTimer = null; var isPaused = false; var isAutoPanning = false;
@@ -631,10 +639,10 @@ var nextScene = function() {
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
   isAutoPanning = true;
-  map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 4.5, easeLinearity: 0.15 });
+  map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.2 });
   map.once('moveend', function() { isAutoPanning = false; });
   sceneIndex = (sceneIndex + 1) % scenes.length;
-  autoPanTimer = setTimeout(nextScene, scene.dwell + 4500);
+  autoPanTimer = setTimeout(nextScene, scene.dwell + 3000);
 };
 
 var pauseAutoPan = function(e) {
