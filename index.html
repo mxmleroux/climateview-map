@@ -216,9 +216,8 @@ var map = L.map('map', {
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
   subdomains: 'abcd', maxZoom: 19,
-  updateWhenZooming: false,
-  updateWhenIdle: true,
-  keepBuffer: 4
+  keepBuffer: 6,
+  updateInterval: 150
 }).addTo(map);
 
 // ---- CSV PARSER ----
@@ -589,6 +588,7 @@ function renderMap(cities) {
 
   // ---- MARKERS (Canvas-rendered pin shapes) ----
   var sorted = cities.slice().sort(function(a, b) { return a.lng - b.lng; });
+  var allPins = [];
   var pulseCount = 0; var MAX_PULSE = 30;
   sorted.forEach(function(city, i) {
     var color = MARKET_COLORS[city.market] || '#78909C';
@@ -596,7 +596,7 @@ function renderMap(cities) {
     if (isNew) pulseCount++;
 
     // Canvas-rendered pin (no DOM element)
-    new L.PinMarker([city.lat, city.lng], {
+    var pin = new L.PinMarker([city.lat, city.lng], {
       renderer: canvasRenderer,
       radius: 6,
       fillColor: color,
@@ -605,6 +605,7 @@ function renderMap(cities) {
     }).bindTooltip(city.name + ' \u2013 ' + city.country, {
       direction: 'right', offset: [10, -5], opacity: 1
     }).addTo(map);
+    allPins.push(pin);
 
     // Pulse overlay (DOM-based, only for new cities)
     if (isNew) {
@@ -620,7 +621,7 @@ function renderMap(cities) {
   });
 
   // ---- PERMANENT CITY LABELS ----
-  var cityLabels = [
+  var cityLabelData = [
     [48.86, 2.35, 'Paris'], [41.90, 12.50, 'Rome'],
     [38.72, -9.14, 'Lisbon'], [59.91, 10.75, 'Oslo'],
     [55.68, 12.57, 'Copenhagen'], [60.17, 24.94, 'Helsinki'],
@@ -635,12 +636,31 @@ function renderMap(cities) {
     [40.71, -74.01, 'New York'], [38.91, -77.04, 'Washington DC'],
     [34.05, -118.24, 'Los Angeles'], [41.88, -87.63, 'Chicago'],
   ];
-  cityLabels.forEach(function(cl) {
-    L.marker([cl[0], cl[1]], {
+  var cityLabelMarkers = [];
+  cityLabelData.forEach(function(cl) {
+    var m = L.marker([cl[0], cl[1]], {
       icon: L.divIcon({ className: 'city-label', html: '<span>' + cl[2] + '</span>', iconSize: [0, 0], iconAnchor: [0, 6] }),
       interactive: false, zIndexOffset: -1000
     }).addTo(map);
+    cityLabelMarkers.push(m);
   });
+
+  // ---- GLOBAL/REGIONAL SCENE SWITCHING ----
+  var PIN_RADIUS_REGIONAL = 6;
+  var PIN_RADIUS_GLOBAL = 3;
+  var isGlobalMode = false;
+
+  window.setSceneMode = function(label) {
+    var goingGlobal = (label === 'Global');
+    if (goingGlobal === isGlobalMode) return;
+    isGlobalMode = goingGlobal;
+    var r = goingGlobal ? PIN_RADIUS_GLOBAL : PIN_RADIUS_REGIONAL;
+    for (var i = 0; i < allPins.length; i++) { allPins[i].setRadius(r); }
+    for (var j = 0; j < cityLabelMarkers.length; j++) {
+      if (goingGlobal) { map.removeLayer(cityLabelMarkers[j]); }
+      else { cityLabelMarkers[j].addTo(map); }
+    }
+  };
 
   setTimeout(startAutoPan, 4000);
 }
@@ -696,6 +716,7 @@ var nextScene = function() {
   if (isPaused) return;
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
+  if (window.setSceneMode) window.setSceneMode(scene.label);
   isAutoPanning = true;
   map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.2 });
   map.once('moveend', function() { isAutoPanning = false; });
