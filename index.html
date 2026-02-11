@@ -128,6 +128,11 @@ body {
 .leaflet-control-fs svg { width: 16px; height: 16px; color: #555; pointer-events: none; }
 body.cursor-hidden, body.cursor-hidden * { cursor: none !important; }
 body.cursor-hidden .leaflet-control-fs { opacity: 0; pointer-events: none !important; }
+body.css-fullscreen { overflow: hidden !important; }
+body.css-fullscreen #map { position: fixed !important; top: 0; left: 0; width: 100vw !important; height: 100vh !important; z-index: 99999 !important; }
+body.css-fullscreen #legend, body.css-fullscreen .leaflet-control-attribution { display: none !important; }
+body.css-fullscreen #region-tag { z-index: 100000 !important; }
+body.css-fullscreen .leaflet-control-fs { z-index: 100000 !important; }
 :fullscreen .leaflet-control-attribution { display: none; }
 :-webkit-full-screen .leaflet-control-attribution { display: none; }
 #loading {
@@ -816,21 +821,61 @@ document.addEventListener('mousemove', function() {
 var ICON_ENTER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
 var ICON_EXIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6m10-10h-6V4m0 6l7-7M3 21l7-7"/></svg>';
 
+var cssFs = false; // tracks CSS-based fallback fullscreen
+
 function isFullscreen() {
-  return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+  return cssFs || !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
 }
+
+function tryRequestFs(el) {
+  if (el.requestFullscreen) return el.requestFullscreen();
+  if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
+  if (el.mozRequestFullScreen) return el.mozRequestFullScreen();
+  if (el.msRequestFullscreen) return el.msRequestFullscreen();
+  return Promise.reject('no API');
+}
+
 function enterFullscreen() {
-  var el = document.documentElement;
-  if (el.requestFullscreen) el.requestFullscreen();
-  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-  else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
-  else if (el.msRequestFullscreen) el.msRequestFullscreen();
+  // Try native fullscreen on multiple elements; fall back to CSS
+  var targets = [document.documentElement, document.body, document.getElementById('map')];
+  (function tryNext(i) {
+    if (i >= targets.length) {
+      // All native attempts failed – use CSS fullscreen
+      cssFs = true;
+      document.body.classList.add('css-fullscreen');
+      updateFsUI();
+      setTimeout(function() { map.invalidateSize(); }, 100);
+      return;
+    }
+    try {
+      var result = tryRequestFs(targets[i]);
+      if (result && result.catch) {
+        result.catch(function() { tryNext(i + 1); });
+      }
+    } catch(e) { tryNext(i + 1); }
+  })(0);
 }
+
 function exitFullscreen() {
+  if (cssFs) {
+    cssFs = false;
+    document.body.classList.remove('css-fullscreen');
+    updateFsUI();
+    setTimeout(function() { map.invalidateSize(); }, 100);
+    return;
+  }
   if (document.exitFullscreen) document.exitFullscreen();
   else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
   else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
   else if (document.msExitFullscreen) document.msExitFullscreen();
+}
+
+function updateFsUI() {
+  var fs = isFullscreen();
+  if (fsControl && fsControl._link) {
+    fsControl._link.innerHTML = fs ? ICON_EXIT : ICON_ENTER;
+    fsControl._link.title = fs ? 'Exit fullscreen' : 'Fullscreen';
+  }
 }
 
 var FsControl = L.Control.extend({
@@ -843,14 +888,23 @@ var FsControl = L.Control.extend({
     link.setAttribute('role', 'button');
     link.setAttribute('aria-label', 'Fullscreen');
     link.innerHTML = ICON_ENTER;
-    L.DomEvent.disableClickPropagation(container);
     L.DomEvent.disableScrollPropagation(container);
-    L.DomEvent.on(link, 'click', function(e) {
-      L.DomEvent.stop(e);
-      L.DomEvent.preventDefault(e);
+    function toggleFs(e) {
+      if (e.preventDefault) e.preventDefault();
+      if (e.stopPropagation) e.stopPropagation();
       if (isFullscreen()) exitFullscreen();
       else enterFullscreen();
+    }
+    link.addEventListener('click', toggleFs);
+    link.addEventListener('touchend', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleFs(e);
     });
+    // Block map from swallowing touch/mouse on this control
+    container.addEventListener('touchstart', function(e) { e.stopPropagation(); });
+    container.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+    container.addEventListener('click', function(e) { e.stopPropagation(); });
     this._link = link;
     return container;
   }
@@ -858,13 +912,24 @@ var FsControl = L.Control.extend({
 var fsControl = new FsControl();
 fsControl.addTo(map);
 
+// Native fullscreen change events
 ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(function(ev) {
   document.addEventListener(ev, function() {
-    var fs = isFullscreen();
-    fsControl._link.innerHTML = fs ? ICON_EXIT : ICON_ENTER;
-    fsControl._link.title = fs ? 'Exit fullscreen' : 'Fullscreen';
+    updateFsUI();
     setTimeout(function() { map.invalidateSize(); }, 200);
   });
+});
+
+// F11 key toggles fullscreen; Escape exits CSS fullscreen
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'F11') {
+    e.preventDefault();
+    if (isFullscreen()) exitFullscreen();
+    else enterFullscreen();
+  }
+  if (e.key === 'Escape' && cssFs) {
+    exitFullscreen();
+  }
 });
 
 // ---- AUTO-HIDE CURSOR (fullscreen) ----
