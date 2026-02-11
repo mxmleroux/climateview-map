@@ -60,13 +60,13 @@ body {
 .leaflet-control-zoom a { background: #fff !important; color: #555 !important; border-color: #ddd !important; }
 .leaflet-control-zoom a:hover { background: #f5f5f5 !important; color: #1a1a1a !important; }
 @keyframes pulseRing {
-  0% { transform: translate(-50%,-50%) scale(0.7); opacity: 0.7; }
-  70% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
-  100% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
+  0% { transform: translate(-50%,-50%) scale(0.5); opacity: 0.7; }
+  70% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
+  100% { transform: translate(-50%,-50%) scale(1.6); opacity: 0; }
 }
 .pulse-dot {
   position: absolute; top: 0; left: 0;
-  width: 12px; height: 12px; border-radius: 50%;
+  width: 10px; height: 10px; border-radius: 50%;
   pointer-events: none;
   will-change: transform, opacity;
 }
@@ -341,6 +341,22 @@ L.Canvas.include({
 });
 
 L.PinMarker = L.CircleMarker.extend({
+  options: {
+    minRadius: 3,
+    maxRadius: 6,
+    zoomLo: 2.5,
+    zoomHi: 4.5
+  },
+  _project: function() {
+    // Compute zoom-dependent radius before projection
+    if (this._map) {
+      var z = this._map.getZoom();
+      var t = Math.max(0, Math.min(1, (z - this.options.zoomLo) / (this.options.zoomHi - this.options.zoomLo)));
+      var ease = t * t * (3 - 2 * t);
+      this._radius = this.options.minRadius + ease * (this.options.maxRadius - this.options.minRadius);
+    }
+    L.CircleMarker.prototype._project.call(this);
+  },
   _updatePath: function() { this._renderer._updatePin(this); },
   _updateBounds: function() {
     var r = this._radius;
@@ -646,26 +662,19 @@ function renderMap(cities) {
     cityLabelMarkers.push(m);
   });
 
-  // ---- ZOOM-DRIVEN PIN SCALING + LABEL VISIBILITY ----
-  var PIN_R_MIN = 3;
-  var PIN_R_MAX = 6;
-  var ZOOM_LO = 2.5;
-  var ZOOM_HI = 4.5;
+  // ---- ZOOM-DRIVEN LABEL VISIBILITY + PULSE SCALING ----
   var LABEL_ZOOM_THRESHOLD = 3.8;
   var labelsVisible = true;
-  var lastPinRadius = PIN_R_MAX;
+  var lastPulseScale = 1;
 
-  function updatePinScale() {
+  function updateZoomUI() {
     var z = map.getZoom();
-    // Interpolate radius: 3 at zoom ≤2.5, 6 at zoom ≥4.5, smooth between
-    var t = Math.max(0, Math.min(1, (z - ZOOM_LO) / (ZOOM_HI - ZOOM_LO)));
-    var ease = t * t * (3 - 2 * t); // smoothstep for gradual transition
-    var r = Math.round((PIN_R_MIN + ease * (PIN_R_MAX - PIN_R_MIN)) * 10) / 10;
-    if (r !== lastPinRadius) {
-      lastPinRadius = r;
-      for (var i = 0; i < allPins.length; i++) { allPins[i].setRadius(r); }
-      // Scale pulse dots proportionally
-      var pulseScale = r / PIN_R_MAX; // 0.5 at global, 1.0 at regional
+    // Scale pulse dots proportionally to pin size
+    var t = Math.max(0, Math.min(1, (z - 2.5) / (4.5 - 2.5)));
+    var ease = t * t * (3 - 2 * t);
+    var pulseScale = Math.round((0.35 + ease * 0.65) * 100) / 100;
+    if (pulseScale !== lastPulseScale) {
+      lastPulseScale = pulseScale;
       for (var p = 0; p < pulseMarkers.length; p++) {
         var el = pulseMarkers[p].getElement ? pulseMarkers[p].getElement() : pulseMarkers[p]._icon;
         if (el) { el.style.transform = 'scale(' + pulseScale + ')'; }
@@ -681,9 +690,9 @@ function renderMap(cities) {
     }
   }
 
-  map.on('zoom', updatePinScale);
-  map.on('zoomend', updatePinScale);
-  updatePinScale();
+  map.on('zoom', updateZoomUI);
+  map.on('zoomend', updateZoomUI);
+  updateZoomUI();
 
   setTimeout(startAutoPan, 4000);
 }
