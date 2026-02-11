@@ -69,7 +69,6 @@ body {
   width: 12px; height: 12px; border-radius: 50%;
   pointer-events: none; z-index: -1;
   will-change: transform, opacity;
-  contain: strict;
 }
 .pulse-dot::before, .pulse-dot::after {
   content: ''; position: absolute; top: 0; left: 0;
@@ -82,7 +81,9 @@ body {
 .city-label span {
   font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 400;
   color: #999; letter-spacing: 0.3px; white-space: nowrap; padding-left: 5px;
+  transition: opacity 0.4s ease;
 }
+.labels-hidden .city-label span { opacity: 0; }
 .leaflet-tooltip {
   background: #ffffff !important; border: 1px solid #e5e5e5 !important;
   color: #1a1a1a !important; font-family: 'Inter', sans-serif !important;
@@ -130,8 +131,6 @@ body {
 #fullscreen-btn svg { width: 18px; height: 18px; color: #555; }
 body.cursor-hidden, body.cursor-hidden * { cursor: none !important; }
 body.cursor-hidden #fullscreen-btn { opacity: 0; pointer-events: none; }
-:fullscreen .leaflet-tooltip-pane { display: none; }
-:-webkit-full-screen .leaflet-tooltip-pane { display: none; }
 :fullscreen .leaflet-control-attribution { display: none; }
 :-webkit-full-screen .leaflet-control-attribution { display: none; }
 #loading {
@@ -645,22 +644,37 @@ function renderMap(cities) {
     cityLabelMarkers.push(m);
   });
 
-  // ---- GLOBAL/REGIONAL SCENE SWITCHING ----
-  var PIN_RADIUS_REGIONAL = 6;
-  var PIN_RADIUS_GLOBAL = 3;
-  var isGlobalMode = false;
+  // ---- ZOOM-DRIVEN PIN SCALING + LABEL VISIBILITY ----
+  var PIN_R_MIN = 3;
+  var PIN_R_MAX = 6;
+  var ZOOM_LO = 2.5;
+  var ZOOM_HI = 4.5;
+  var LABEL_ZOOM_THRESHOLD = 3.8;
+  var labelsVisible = true;
+  var lastPinRadius = PIN_R_MAX;
 
-  window.setSceneMode = function(label) {
-    var goingGlobal = (label === 'Global');
-    if (goingGlobal === isGlobalMode) return;
-    isGlobalMode = goingGlobal;
-    var r = goingGlobal ? PIN_RADIUS_GLOBAL : PIN_RADIUS_REGIONAL;
-    for (var i = 0; i < allPins.length; i++) { allPins[i].setRadius(r); }
-    for (var j = 0; j < cityLabelMarkers.length; j++) {
-      if (goingGlobal) { map.removeLayer(cityLabelMarkers[j]); }
-      else { cityLabelMarkers[j].addTo(map); }
+  function updatePinScale() {
+    var z = map.getZoom();
+    // Interpolate radius: 3 at zoom ≤2.5, 6 at zoom ≥4.5, linear between
+    var t = Math.max(0, Math.min(1, (z - ZOOM_LO) / (ZOOM_HI - ZOOM_LO)));
+    var r = Math.round((PIN_R_MIN + t * (PIN_R_MAX - PIN_R_MIN)) * 2) / 2;
+    if (r !== lastPinRadius) {
+      lastPinRadius = r;
+      for (var i = 0; i < allPins.length; i++) { allPins[i].setRadius(r); }
     }
-  };
+    // Labels
+    var shouldShow = z >= LABEL_ZOOM_THRESHOLD;
+    if (shouldShow !== labelsVisible) {
+      labelsVisible = shouldShow;
+      var mapEl = document.getElementById('map');
+      if (shouldShow) { mapEl.classList.remove('labels-hidden'); }
+      else { mapEl.classList.add('labels-hidden'); }
+    }
+  }
+
+  map.on('zoom', updatePinScale);
+  map.on('zoomend', updatePinScale);
+  updatePinScale();
 
   setTimeout(startAutoPan, 4000);
 }
@@ -716,7 +730,6 @@ var nextScene = function() {
   if (isPaused) return;
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
-  if (window.setSceneMode) window.setSceneMode(scene.label);
   isAutoPanning = true;
   map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.2 });
   map.once('moveend', function() { isAutoPanning = false; });
