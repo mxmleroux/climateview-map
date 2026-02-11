@@ -500,7 +500,7 @@ function renderMap(cities) {
   legendEl.innerHTML = legendHTML;
 
   // ---- NEW-CITY DETECTION via localStorage ----
-  var STORAGE_KEY = 'cv_map_cities_v2';
+  var STORAGE_KEY = 'cv_map_cities_v3';
   var newCitySet = {};
   try {
     var now = Date.now();
@@ -511,7 +511,7 @@ function renderMap(cities) {
       var key = c.name + '|' + c.country;
       if (stored[key] !== undefined) {
         updated[key] = stored[key];
-        if (stored[key] > 0 && now - stored[key] < 30 * 24 * 60 * 60 * 1000) {
+        if (stored[key] > 0 && now - stored[key] < 10 * 24 * 60 * 60 * 1000) {
           newCitySet[key] = true;
         }
       } else {
@@ -637,7 +637,8 @@ var nextScene = function() {
   autoPanTimer = setTimeout(nextScene, scene.dwell + 4500);
 };
 
-var pauseAutoPan = function() {
+var pauseAutoPan = function(e) {
+  if (isAutoPanning && e && e.type === 'zoomstart') return;
   if (isAutoPanning) { map.stop(); isAutoPanning = false; }
   isPaused = true; hideRegionTag();
   clearTimeout(autoPanTimer); clearTimeout(pauseTimer);
