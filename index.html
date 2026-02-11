@@ -59,18 +59,6 @@ body {
 .leaflet-control-attribution a { color: #888 !important; }
 .leaflet-control-zoom a { background: #fff !important; color: #555 !important; border-color: #ddd !important; }
 .leaflet-control-zoom a:hover { background: #f5f5f5 !important; color: #1a1a1a !important; }
-@keyframes pinFlyIn {
-  0% { opacity: 0; transform: translateY(-35px) scale(0.2); }
-  55% { opacity: 1; transform: translateY(2px) scale(1.04); }
-  78% { transform: translateY(-1px) scale(0.98); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
-}
-.pin-marker {
-  cursor: pointer; pointer-events: auto;
-  contain: layout style;
-}
-:fullscreen .pin-marker { pointer-events: none; }
-:-webkit-full-screen .pin-marker { pointer-events: none; }
 @keyframes pulseRing {
   0% { transform: translate(-50%,-50%) scale(0.7); opacity: 0.7; }
   70% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
@@ -91,14 +79,6 @@ body {
   will-change: transform, opacity;
 }
 .pulse-dot::after { animation-delay: 1.2s; }
-.pin-inner {
-  opacity: 0; display: inline-block;
-  will-change: transform, opacity;
-  contain: layout style;
-}
-.fly-in .pin-inner {
-  animation: pinFlyIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
 .city-label span {
   font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 400;
   color: #999; letter-spacing: 0.3px; white-space: nowrap; padding-left: 5px;
@@ -137,19 +117,7 @@ body {
   will-change: opacity, transform;
 }
 #region-tag.visible { opacity: 1; transform: translateY(0); }
-.map-flying .leaflet-marker-pane,
-.map-flying .leaflet-tooltip-pane,
-.map-flying .leaflet-shadow-pane {
-  visibility: hidden;
-}
-.leaflet-marker-pane,
-.leaflet-tooltip-pane {
-  transition: opacity 0.4s ease;
-}
-.map-flying .leaflet-marker-pane,
-.map-flying .leaflet-tooltip-pane {
-  opacity: 0;
-}
+.pulse-marker { pointer-events: none; }
 #fullscreen-btn {
   position: fixed; bottom: 36px; right: 48px;
   width: 40px; height: 40px; border-radius: 8px;
@@ -344,12 +312,63 @@ function findCoords(cityName, country, sheetMarket) {
   return null;
 }
 
-// ---- PIN SVG ----
-var pinSvg = function(color, isNew) {
-  var pulse = isNew ? '<span class="pulse-dot" style="color:' + color + '"></span>' : '';
-  return '<span class="pin-inner">' + pulse + '<svg viewBox="0 0 12 16" width="12" height="17" xmlns="http://www.w3.org/2000/svg">' +
-    '<path d="M6 0C2.7 0 0 2.7 0 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.3-2.7-6-6-6z" fill="' + color + '"/>' +
-    '<circle cx="6" cy="5.8" r="2" fill="white" opacity="0.9"/></svg></span>';
+// ---- CANVAS PIN RENDERER (teardrop shape, single canvas element) ----
+var canvasRenderer = L.canvas({ padding: 0.3 });
+
+L.Canvas.include({
+  _updatePin: function(layer) {
+    if (!this._drawing || layer._empty()) return;
+    var p = layer._point;
+    var ctx = this._ctx;
+    var r = Math.max(Math.round(layer._radius), 1);
+    var h = Math.round(r * 1.65);
+    var cx = p.x;
+    var cy = p.y - h;
+    var a = Math.asin(Math.min(r / Math.max(h, 1), 1));
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, Math.PI * 0.5 - a, Math.PI * 0.5 + a, true);
+    ctx.lineTo(cx, p.y);
+    ctx.closePath();
+    this._fillStroke(ctx, layer);
+
+    var ga = ctx.globalAlpha;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.38, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.globalAlpha = ga;
+  }
+});
+
+L.PinMarker = L.CircleMarker.extend({
+  _updatePath: function() { this._renderer._updatePin(this); },
+  _updateBounds: function() {
+    var r = this._radius;
+    var h = Math.round(r * 1.65);
+    var w = this._clickTolerance();
+    this._pxBounds = new L.Bounds(
+      [this._point.x - r - w, this._point.y - h - r - w],
+      [this._point.x + r + w, this._point.y + w]
+    );
+  },
+  _containsPoint: function(p) {
+    var r = this._radius, h = Math.round(r * 1.65);
+    var cx = this._point.x, cy = this._point.y - h;
+    var dx = p.x - cx, dy = p.y - cy;
+    if (dx * dx + dy * dy <= (r + 3) * (r + 3)) return true;
+    if (p.y > cy && p.y <= this._point.y) {
+      var t = (p.y - cy) / h;
+      if (Math.abs(p.x - cx) <= r * (1 - t * 0.9) + 2) return true;
+    }
+    return false;
+  }
+});
+
+// ---- PULSE OVERLAY (divIcon, only for new cities) ----
+var pulseSvg = function(color) {
+  return '<span class="pulse-dot" style="color:' + color + '"></span>';
 };
 
 // ---- GEOCODING FALLBACK (OpenStreetMap Nominatim) ----
@@ -568,33 +587,36 @@ function renderMap(cities) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   } catch(e) {}
 
-  // ---- MARKERS with fly-in animation ----
+  // ---- MARKERS (Canvas-rendered pin shapes) ----
   var sorted = cities.slice().sort(function(a, b) { return a.lng - b.lng; });
-  var allMarkers = [];
   var pulseCount = 0; var MAX_PULSE = 30;
   sorted.forEach(function(city, i) {
     var color = MARKET_COLORS[city.market] || '#78909C';
     var isNew = !!newCitySet[city.name + '|' + city.country] && pulseCount < MAX_PULSE;
     if (isNew) pulseCount++;
-    var icon = L.divIcon({
-      className: 'pin-marker',
-      html: pinSvg(color, isNew),
-      iconSize: [12, 17], iconAnchor: [6, 17]
-    });
-    var marker = L.marker([city.lat, city.lng], { icon: icon })
-      .bindTooltip(city.name + ' \u2013 ' + city.country, {
-        direction: 'right', offset: [8, -7], opacity: 1
-      }).addTo(map);
-    allMarkers.push({ marker: marker, index: i });
-  });
 
-  // Fly-in: staggered with randomness for organic feel
-  allMarkers.forEach(function(item) {
-    var delay = 500 + item.index * 6 + Math.random() * 80;
-    setTimeout(function() {
-      var el = item.marker.getElement ? item.marker.getElement() : item.marker._icon;
-      if (el) el.classList.add('fly-in');
-    }, delay);
+    // Canvas-rendered pin (no DOM element)
+    new L.PinMarker([city.lat, city.lng], {
+      renderer: canvasRenderer,
+      radius: 6,
+      fillColor: color,
+      fillOpacity: 0.9,
+      stroke: false
+    }).bindTooltip(city.name + ' \u2013 ' + city.country, {
+      direction: 'right', offset: [10, -5], opacity: 1
+    }).addTo(map);
+
+    // Pulse overlay (DOM-based, only for new cities)
+    if (isNew) {
+      L.marker([city.lat, city.lng], {
+        icon: L.divIcon({
+          className: 'pulse-marker',
+          html: pulseSvg(color),
+          iconSize: [0, 0], iconAnchor: [0, 0]
+        }),
+        interactive: false, zIndexOffset: -500
+      }).addTo(map);
+    }
   });
 
   // ---- PERMANENT CITY LABELS ----
@@ -633,22 +655,18 @@ function addCitiesToMap(newCities) {
   counterEl.textContent = newTotal;
   remainEl.textContent = Math.max(600 - newTotal, 0);
 
-  // Add pins
-  newCities.forEach(function(city, i) {
+  // Add canvas pin markers
+  newCities.forEach(function(city) {
     var color = MARKET_COLORS[city.market] || '#78909C';
-    var icon = L.divIcon({
-      className: 'pin-marker',
-      html: pinSvg(color, false),
-      iconSize: [12, 17], iconAnchor: [6, 17]
-    });
-    var marker = L.marker([city.lat, city.lng], { icon: icon })
-      .bindTooltip(city.name + ' \u2013 ' + city.country, {
-        direction: 'right', offset: [8, -7], opacity: 1
-      }).addTo(map);
-    setTimeout(function() {
-      var el = marker.getElement ? marker.getElement() : marker._icon;
-      if (el) el.classList.add('fly-in');
-    }, 200 + i * 50);
+    new L.PinMarker([city.lat, city.lng], {
+      renderer: canvasRenderer,
+      radius: 6,
+      fillColor: color,
+      fillOpacity: 0.9,
+      stroke: false
+    }).bindTooltip(city.name + ' \u2013 ' + city.country, {
+      direction: 'right', offset: [10, -5], opacity: 1
+    }).addTo(map);
   });
 }
 
@@ -674,25 +692,20 @@ var scenes = [
 var sceneIndex = 0; var autoPanTimer = null;
 var pauseTimer = null; var isPaused = false; var isAutoPanning = false;
 
-var mapContainer = document.getElementById('map');
 var nextScene = function() {
   if (isPaused) return;
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
   isAutoPanning = true;
-  mapContainer.classList.add('map-flying');
   map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.2 });
-  map.once('moveend', function() {
-    isAutoPanning = false;
-    mapContainer.classList.remove('map-flying');
-  });
+  map.once('moveend', function() { isAutoPanning = false; });
   sceneIndex = (sceneIndex + 1) % scenes.length;
   autoPanTimer = setTimeout(nextScene, scene.dwell + 3000);
 };
 
 var pauseAutoPan = function(e) {
   if (isAutoPanning && e && e.type === 'zoomstart') return;
-  if (isAutoPanning) { map.stop(); isAutoPanning = false; mapContainer.classList.remove('map-flying'); }
+  if (isAutoPanning) { map.stop(); isAutoPanning = false; }
   isPaused = true; hideRegionTag();
   clearTimeout(autoPanTimer); clearTimeout(pauseTimer);
   pauseTimer = setTimeout(function() { isPaused = false; nextScene(); }, 30000);
