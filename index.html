@@ -119,18 +119,18 @@ body {
 }
 #region-tag.visible { opacity: 1; transform: translateY(0); }
 .pulse-marker { pointer-events: none; }
-#fullscreen-btn {
-  position: fixed; bottom: 36px; right: 48px;
-  width: 40px; height: 40px; border-radius: 8px;
-  background: rgba(255,255,255,0.92); border: 1px solid #e0e0e0;
-  cursor: pointer; z-index: 1001; display: flex;
+.fs-control {
+  width: 40px !important; height: 40px !important; border-radius: 8px !important;
+  background: rgba(255,255,255,0.92) !important; border: 1px solid #e0e0e0 !important;
+  cursor: pointer !important; display: flex !important;
   align-items: center; justify-content: center;
   transition: opacity 0.4s ease, background 0.2s ease;
+  pointer-events: auto !important;
 }
-#fullscreen-btn:hover { background: #f0f0f0; }
-#fullscreen-btn svg { width: 18px; height: 18px; color: #555; }
+.fs-control:hover { background: #f0f0f0 !important; }
+.fs-control svg { width: 18px; height: 18px; color: #555; pointer-events: none; }
 body.cursor-hidden, body.cursor-hidden * { cursor: none !important; }
-body.cursor-hidden #fullscreen-btn { opacity: 0; pointer-events: none; }
+body.cursor-hidden .fs-control { opacity: 0; pointer-events: none !important; }
 :fullscreen .leaflet-control-attribution { display: none; }
 :-webkit-full-screen .leaflet-control-attribution { display: none; }
 #loading {
@@ -181,11 +181,6 @@ body.cursor-hidden #fullscreen-btn { opacity: 0; pointer-events: none; }
 <div id="map"></div>
 <div id="legend"></div>
 <div id="region-tag"></div>
-<div id="fullscreen-btn" title="Fullscreen">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-  </svg>
-</div>
 <div id="loading">Loading city data…</div>
 
 <script>
@@ -820,8 +815,10 @@ document.addEventListener('mousemove', function() {
   pauseTimer = setTimeout(function() { isPaused = false; nextScene(); }, 30000);
 });
 
-// ---- FULLSCREEN ----
-var fsBtn = document.getElementById('fullscreen-btn');
+// ---- FULLSCREEN (Leaflet control) ----
+var ICON_ENTER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+var ICON_EXIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6m10-10h-6V4m0 6l7-7M3 21l7-7"/></svg>';
+
 function isFullscreen() {
   return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
 }
@@ -838,13 +835,34 @@ function exitFullscreen() {
   else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
   else if (document.msExitFullscreen) document.msExitFullscreen();
 }
-fsBtn.addEventListener('click', function(e) {
-  e.stopPropagation();
-  if (isFullscreen()) { exitFullscreen(); }
-  else { enterFullscreen(); }
+
+var FsControl = L.Control.extend({
+  options: { position: 'bottomright' },
+  onAdd: function() {
+    var btn = L.DomUtil.create('div', 'fs-control');
+    btn.title = 'Fullscreen';
+    btn.innerHTML = ICON_ENTER;
+    L.DomEvent.disableClickPropagation(btn);
+    L.DomEvent.disableScrollPropagation(btn);
+    L.DomEvent.on(btn, 'click', function(e) {
+      L.DomEvent.stop(e);
+      if (isFullscreen()) exitFullscreen();
+      else enterFullscreen();
+    });
+    this._btn = btn;
+    return btn;
+  }
 });
+var fsControl = new FsControl();
+fsControl.addTo(map);
+
 ['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(function(ev) {
-  document.addEventListener(ev, function() { setTimeout(function() { map.invalidateSize(); }, 200); });
+  document.addEventListener(ev, function() {
+    var fs = isFullscreen();
+    fsControl._btn.innerHTML = fs ? ICON_EXIT : ICON_ENTER;
+    fsControl._btn.title = fs ? 'Exit fullscreen' : 'Fullscreen';
+    setTimeout(function() { map.invalidateSize(); }, 200);
+  });
 });
 
 // ---- AUTO-HIDE CURSOR (fullscreen) ----
