@@ -588,6 +588,7 @@ function renderMap(cities) {
   // ---- MARKERS (Canvas-rendered pin shapes) ----
   var sorted = cities.slice().sort(function(a, b) { return a.lng - b.lng; });
   var allPins = [];
+  var pulseMarkers = [];
   var pulseCount = 0; var MAX_PULSE = 30;
   sorted.forEach(function(city, i) {
     var color = MARKET_COLORS[city.market] || '#78909C';
@@ -608,7 +609,7 @@ function renderMap(cities) {
 
     // Pulse overlay (DOM-based, only for new cities)
     if (isNew) {
-      L.marker([city.lat, city.lng], {
+      var pm = L.marker([city.lat, city.lng], {
         icon: L.divIcon({
           className: 'pulse-marker',
           html: pulseSvg(color),
@@ -616,6 +617,7 @@ function renderMap(cities) {
         }),
         interactive: false, zIndexOffset: -500
       }).addTo(map);
+      pulseMarkers.push(pm);
     }
   });
 
@@ -662,6 +664,12 @@ function renderMap(cities) {
     if (r !== lastPinRadius) {
       lastPinRadius = r;
       for (var i = 0; i < allPins.length; i++) { allPins[i].setRadius(r); }
+      // Scale pulse dots proportionally
+      var pulseScale = r / PIN_R_MAX; // 0.5 at global, 1.0 at regional
+      for (var p = 0; p < pulseMarkers.length; p++) {
+        var el = pulseMarkers[p].getElement ? pulseMarkers[p].getElement() : pulseMarkers[p]._icon;
+        if (el) { el.style.transform = 'scale(' + pulseScale + ')'; }
+      }
     }
     // Labels
     var shouldShow = z >= LABEL_ZOOM_THRESHOLD;
@@ -757,23 +765,37 @@ document.addEventListener('mousemove', function() {
 
 // ---- FULLSCREEN ----
 var fsBtn = document.getElementById('fullscreen-btn');
-fsBtn.addEventListener('click', function() {
-  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-    var el = document.documentElement;
-    (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
-  } else {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  }
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+}
+function enterFullscreen() {
+  var el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+  else if (el.msRequestFullscreen) el.msRequestFullscreen();
+}
+function exitFullscreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+  else if (document.msExitFullscreen) document.msExitFullscreen();
+}
+fsBtn.addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (isFullscreen()) { exitFullscreen(); }
+  else { enterFullscreen(); }
 });
-document.addEventListener('fullscreenchange', function() { setTimeout(function() { map.invalidateSize(); }, 200); });
-document.addEventListener('webkitfullscreenchange', function() { setTimeout(function() { map.invalidateSize(); }, 200); });
+['fullscreenchange','webkitfullscreenchange','mozfullscreenchange','MSFullscreenChange'].forEach(function(ev) {
+  document.addEventListener(ev, function() { setTimeout(function() { map.invalidateSize(); }, 200); });
+});
 
 // ---- AUTO-HIDE CURSOR (fullscreen) ----
 var cursorTimer = null;
 document.addEventListener('mousemove', function() {
   document.body.classList.remove('cursor-hidden');
   clearTimeout(cursorTimer);
-  if (document.fullscreenElement || document.webkitFullscreenElement) {
+  if (isFullscreen()) {
     cursorTimer = setTimeout(function() { document.body.classList.add('cursor-hidden'); }, 3000);
   }
 });
