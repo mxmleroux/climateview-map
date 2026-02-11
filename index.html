@@ -67,7 +67,10 @@ body {
 }
 .pin-marker {
   cursor: pointer; pointer-events: auto;
+  contain: layout style;
 }
+:fullscreen .pin-marker { pointer-events: none; }
+:-webkit-full-screen .pin-marker { pointer-events: none; }
 @keyframes pulseRing {
   0% { transform: translate(-50%,-50%) scale(0.7); opacity: 0.7; }
   70% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
@@ -134,6 +137,35 @@ body {
   will-change: opacity, transform;
 }
 #region-tag.visible { opacity: 1; transform: translateY(0); }
+.map-flying .leaflet-marker-pane,
+.map-flying .leaflet-tooltip-pane,
+.map-flying .leaflet-shadow-pane {
+  visibility: hidden;
+}
+.leaflet-marker-pane,
+.leaflet-tooltip-pane {
+  transition: opacity 0.4s ease;
+}
+.map-flying .leaflet-marker-pane,
+.map-flying .leaflet-tooltip-pane {
+  opacity: 0;
+}
+#fullscreen-btn {
+  position: fixed; bottom: 36px; right: 48px;
+  width: 40px; height: 40px; border-radius: 8px;
+  background: rgba(255,255,255,0.92); border: 1px solid #e0e0e0;
+  cursor: pointer; z-index: 1001; display: flex;
+  align-items: center; justify-content: center;
+  transition: opacity 0.4s ease, background 0.2s ease;
+}
+#fullscreen-btn:hover { background: #f0f0f0; }
+#fullscreen-btn svg { width: 18px; height: 18px; color: #555; }
+body.cursor-hidden, body.cursor-hidden * { cursor: none !important; }
+body.cursor-hidden #fullscreen-btn { opacity: 0; pointer-events: none; }
+:fullscreen .leaflet-tooltip-pane { display: none; }
+:-webkit-full-screen .leaflet-tooltip-pane { display: none; }
+:fullscreen .leaflet-control-attribution { display: none; }
+:-webkit-full-screen .leaflet-control-attribution { display: none; }
 #loading {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   font-family: 'Inter', sans-serif; font-size: 12px; color: #aaa;
@@ -182,6 +214,11 @@ body {
 <div id="map"></div>
 <div id="legend"></div>
 <div id="region-tag"></div>
+<div id="fullscreen-btn" title="Fullscreen">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+  </svg>
+</div>
 <div id="loading">Loading city data…</div>
 
 <script>
@@ -210,7 +247,10 @@ var map = L.map('map', {
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-  subdomains: 'abcd', maxZoom: 19
+  subdomains: 'abcd', maxZoom: 19,
+  updateWhenZooming: false,
+  updateWhenIdle: true,
+  keepBuffer: 4
 }).addTo(map);
 
 // ---- CSV PARSER ----
@@ -634,20 +674,25 @@ var scenes = [
 var sceneIndex = 0; var autoPanTimer = null;
 var pauseTimer = null; var isPaused = false; var isAutoPanning = false;
 
+var mapContainer = document.getElementById('map');
 var nextScene = function() {
   if (isPaused) return;
   var scene = scenes[sceneIndex];
   showRegionTag(scene.label);
   isAutoPanning = true;
+  mapContainer.classList.add('map-flying');
   map.flyTo([scene.lat, scene.lng], scene.zoom, { duration: 3, easeLinearity: 0.2 });
-  map.once('moveend', function() { isAutoPanning = false; });
+  map.once('moveend', function() {
+    isAutoPanning = false;
+    mapContainer.classList.remove('map-flying');
+  });
   sceneIndex = (sceneIndex + 1) % scenes.length;
   autoPanTimer = setTimeout(nextScene, scene.dwell + 3000);
 };
 
 var pauseAutoPan = function(e) {
   if (isAutoPanning && e && e.type === 'zoomstart') return;
-  if (isAutoPanning) { map.stop(); isAutoPanning = false; }
+  if (isAutoPanning) { map.stop(); isAutoPanning = false; mapContainer.classList.remove('map-flying'); }
   isPaused = true; hideRegionTag();
   clearTimeout(autoPanTimer); clearTimeout(pauseTimer);
   pauseTimer = setTimeout(function() { isPaused = false; nextScene(); }, 30000);
@@ -660,6 +705,29 @@ document.addEventListener('mousemove', function() {
   if (!isPaused) return;
   clearTimeout(pauseTimer);
   pauseTimer = setTimeout(function() { isPaused = false; nextScene(); }, 30000);
+});
+
+// ---- FULLSCREEN ----
+var fsBtn = document.getElementById('fullscreen-btn');
+fsBtn.addEventListener('click', function() {
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+    var el = document.documentElement;
+    (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+});
+document.addEventListener('fullscreenchange', function() { setTimeout(function() { map.invalidateSize(); }, 200); });
+document.addEventListener('webkitfullscreenchange', function() { setTimeout(function() { map.invalidateSize(); }, 200); });
+
+// ---- AUTO-HIDE CURSOR (fullscreen) ----
+var cursorTimer = null;
+document.addEventListener('mousemove', function() {
+  document.body.classList.remove('cursor-hidden');
+  clearTimeout(cursorTimer);
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    cursorTimer = setTimeout(function() { document.body.classList.add('cursor-hidden'); }, 3000);
+  }
 });
 </script>
 </body>
