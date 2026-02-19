@@ -941,6 +941,166 @@ document.addEventListener('mousemove', function() {
     cursorTimer = setTimeout(function() { document.body.classList.add('cursor-hidden'); }, 3000);
   }
 });
+
+// ---- SILENT DAILY RE-FETCH (updates counter, legend, adds new pins – no reload) ----
+(function() {
+  // Daily refresh targets 8:00 AM local time
+  var knownCoordKeys = {};  // populated after initial render
+
+  // Capture initial city coords after first render
+  function captureInitialCities() {
+    // Re-fetch CSV and build the known set
+    tryFetch(SHEET_URL, 'initial-capture')
+      .catch(function() { return tryFetch(SHEET_URL + '&gid=0', 'initial-capture-gid'); })
+      .then(function(csv) {
+        var rows = parseCSV(csv);
+        rows.forEach(function(row) {
+          var cityName = row['City Name (Cleaned)'] || row['City Name'] || row['city'] || row['City'] || '';
+          var country = row['Country'] || row['country'] || '';
+          var sheetMarket = row['Market'] || row['market'] || '';
+          if (!cityName) return;
+          var result = findCoords(cityName, country, sheetMarket);
+          if (result) {
+            knownCoordKeys[result.coords[0] + ',' + result.coords[1]] = true;
+          }
+        });
+        console.log('[ClimateView] Captured ' + Object.keys(knownCoordKeys).length + ' initial city positions for daily sync');
+      })
+      .catch(function() {});
+  }
+
+  function silentRefresh() {
+    console.log('[ClimateView] Silent daily refresh starting...');
+    tryFetch(SHEET_URL, 'daily-refresh')
+      .catch(function() { return tryFetch(SHEET_URL + '&gid=0', 'daily-refresh-gid'); })
+      .then(function(csv) {
+        var rows = parseCSV(csv);
+        var cities = [];
+        var seenCoords = {};
+        var newPins = [];
+        var needGeocode = [];
+
+        rows.forEach(function(row) {
+          var cityName = row['City Name (Cleaned)'] || row['City Name'] || row['city'] || row['City'] || '';
+          var country = row['Country'] || row['country'] || '';
+          var sheetMarket = row['Market'] || row['market'] || '';
+          if (!cityName) return;
+
+          var result = findCoords(cityName, country, sheetMarket);
+          var coordKey, market;
+          if (result) {
+            coordKey = result.coords[0] + ',' + result.coords[1];
+            if (seenCoords[coordKey]) return;
+            seenCoords[coordKey] = true;
+            market = mapMarket(sheetMarket, country);
+            cities.push({ name: result.displayName, lat: result.coords[0], lng: result.coords[1], country: country, market: market });
+            if (!knownCoordKeys[coordKey]) {
+              newPins.push({ name: result.displayName, lat: result.coords[0], lng: result.coords[1], country: country, market: market });
+              knownCoordKeys[coordKey] = true;
+            }
+          } else {
+            needGeocode.push({ cityName: cityName, country: country, sheetMarket: sheetMarket });
+          }
+        });
+
+        // Update counter and legend immediately with resolved cities
+        function updateUI() {
+          var counterEl = document.getElementById('counter');
+          var remainEl = document.getElementById('counter-remaining');
+          counterEl.textContent = cities.length;
+          remainEl.textContent = Math.max(600 - cities.length, 0);
+          var marketCounts = {};
+          cities.forEach(function(c) { marketCounts[c.market] = (marketCounts[c.market] || 0) + 1; });
+          var legendEl = document.getElementById('legend');
+          var legendHTML = '';
+          LEGEND_ORDER.forEach(function(m) {
+            var count = marketCounts[m] || 0;
+            if (count === 0) return;
+            var color = MARKET_COLORS[m] || '#888';
+            legendHTML += '<div class="legend-item">' +
+              '<svg class="legend-pin" viewBox="0 0 12 16" width="12" height="16">' +
+              '<path d="M6 0C2.7 0 0 2.7 0 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.3-2.7-6-6-6z" fill="' + color + '"/>' +
+              '<circle cx="6" cy="5.8" r="2" fill="white" opacity="0.9"/></svg>' +
+              m + ' (' + count + ')</div>';
+          });
+          legendEl.innerHTML = legendHTML;
+        }
+        updateUI();
+
+        // Add resolved new pins
+        function addPinsToMap(pinList) {
+          if (pinList.length === 0) return;
+          console.log('[ClimateView] Adding ' + pinList.length + ' new pins to map');
+          pinList.forEach(function(city) {
+            var color = MARKET_COLORS[city.market] || '#78909C';
+            new L.PinMarker([city.lat, city.lng], {
+              renderer: canvasRenderer, radius: 6,
+              fillColor: color, fillOpacity: 0.9, stroke: false
+            }).bindTooltip(city.name + ' \u2013 ' + city.country, {
+              direction: 'right', offset: [10, -5], opacity: 1
+            }).addTo(map);
+          });
+        }
+        addPinsToMap(newPins);
+
+        console.log('[ClimateView] Silent refresh: ' + cities.length + ' resolved' + (newPins.length ? ', ' + newPins.length + ' new' : '') + (needGeocode.length ? ', ' + needGeocode.length + ' pending geocode' : ''));
+
+        // Geocode unresolved cities in background (Nominatim, sequential, rate-limited)
+        if (needGeocode.length > 0) {
+          console.log('[ClimateView] Geocoding ' + needGeocode.length + ' new cities via Nominatim...');
+          needGeocode.forEach(function(x) { console.log('  ' + x.cityName + ' | ' + x.country); });
+          geocodeBatch(needGeocode).then(function(geoResults) {
+            var geocodedPins = [];
+            geoResults.forEach(function(gr) {
+              if (!gr.result) return;
+              var ck = gr.result.coords[0] + ',' + gr.result.coords[1];
+              if (seenCoords[ck]) return;
+              seenCoords[ck] = true;
+              var m = mapMarket(gr.item.sheetMarket, gr.item.country);
+              var city = { name: gr.result.displayName, lat: gr.result.coords[0], lng: gr.result.coords[1], country: gr.item.country, market: m };
+              cities.push(city);
+              if (!knownCoordKeys[ck]) {
+                geocodedPins.push(city);
+                knownCoordKeys[ck] = true;
+              }
+            });
+            addPinsToMap(geocodedPins);
+            updateUI();
+            console.log('[ClimateView] Geocoding done: ' + geocodedPins.length + ' added, total now ' + cities.length);
+          });
+        }
+      })
+      .catch(function(err) {
+        console.warn('[ClimateView] Silent refresh failed:', err.message || err);
+      });
+  }
+
+  // Capture initial state after first load settles
+  setTimeout(captureInitialCities, 10000);
+
+  // Schedule daily refresh at 8:00 AM local time
+  function msUntilNext8am() {
+    var now = new Date();
+    var next = new Date(now);
+    next.setHours(8, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next - now;
+  }
+
+  function scheduleDailyRefresh() {
+    var delay = msUntilNext8am();
+    var nextRun = new Date(Date.now() + delay);
+    console.log('[ClimateView] Next refresh at ' + nextRun.toLocaleString() + ' (' + Math.round(delay / 3600000 * 10) / 10 + 'h from now)');
+    setTimeout(function() {
+      silentRefresh();
+      // After first 8am run, repeat every 24h
+      setInterval(silentRefresh, 24 * 60 * 60 * 1000);
+      console.log('[ClimateView] Daily 8am refresh cycle active');
+    }, delay);
+  }
+
+  scheduleDailyRefresh();
+})();
 </script>
 </body>
 </html>
